@@ -1,0 +1,8 @@
+.env
+config.json
+deals.jsonl
+.venv/
+__pycache__/
+*.pyc
+*.session
+*.session-journal

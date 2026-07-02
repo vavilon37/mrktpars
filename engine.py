@@ -1,0 +1,125 @@
+"""
+Ядро сканера — общее для CLI (scanner.py) и бота (bot.py).
+
+Config хранит настройки (коллекции, порог маржи, токен, прокси) и умеет
+сохраняться в JSON, чтобы переживать перезапуск. ScanEngine делает один обход
+рынка (scan_once) и возвращает НОВЫЕ найденные флипы.
+"""
+
+from __future__ import annotations
+import json
+import datetime as dt
+from dataclasses import dataclass, field, asdict
+
+from mrkt_client import MrktClient, MrktError, price_of, id_of, number_of
+
+
+@dataclass
+class Config:
+    token: str = ""                       # токен MRKT из DevTools (или /settoken в боте)
+    proxy: str | None = None              # socks5://... — напр. через немецкий VPS
+    collections: list[str] = field(
+        default_factory=lambda: ["Plush Pepe", "Durov's Cap", "Snoop Dogg"])
+    margin: float = 0.12                  # мин. скидка к floor
+    floor_rank: int = 3                   # какой по счёту лот считать floor
+    fee: float = 0.05                     # комиссия продавца MRKT
+    poll: float = 20.0                    # пауза между обходами, сек
+    paused: bool = False
+
+    @classmethod
+    def load(cls, path: str) -> "Config":
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            known = {k: v for k, v in data.items() if k in cls.__annotations__}
+            return cls(**known)
+        except (FileNotFoundError, json.JSONDecodeError, TypeError):
+            return cls()
+
+    def save(self, path: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(asdict(self), f, ensure_ascii=False, indent=2)
+
+
+def find_deals(items: list[dict], cfg: Config) -> tuple[float | None, list[dict]]:
+    """floor = цена лота ранга floor_rank; deals = лоты дешевле floor*(1-margin)."""
+    priced = [(price_of(it), it) for it in items]
+    priced = [(p, it) for p, it in priced if p is not None]
+    priced.sort(key=lambda x: x[0])
+    if len(priced) < cfg.floor_rank:
+        return (priced[0][0] if priced else None), []
+    floor = priced[cfg.floor_rank - 1][0]
+    threshold = floor * (1 - cfg.margin)
+    deals = []
+    for p, it in priced:
+        if p <= threshold:
+            it = dict(it)
+            it["_buy"] = p
+            it["_floor"] = floor
+            it["_net_profit"] = round(floor * (1 - cfg.fee) - p, 3)
+            it["_margin_pct"] = round((floor - p) / floor * 100, 1)
+            deals.append(it)
+    return floor, deals
+
+
+class TokenExpired(MrktError):
+    pass
+
+
+class ScanEngine:
+    def __init__(self, cfg: Config, log_path: str = "deals.jsonl"):
+        self.cfg = cfg
+        self.log_path = log_path
+        self.seen: set[str] = set()
+        self.scans = 0
+        self.total_found = 0
+        self.last_scan: str | None = None
+        self.last_error: str | None = None
+
+    def _client(self) -> MrktClient:
+        return MrktClient(self.cfg.token, proxy=self.cfg.proxy)
+
+    def scan_once(self) -> list[dict]:
+        """Один обход всех коллекций. Возвращает список НОВЫХ флипов (dict-записи)."""
+        if not self.cfg.token:
+            raise MrktError("Токен не задан. Пришли его командой /settoken.")
+        client = self._client()
+        out: list[dict] = []
+        for coll in self.cfg.collections:
+            try:
+                items = client.cheapest(coll, count=20)
+            except MrktError as e:
+                if "протух" in str(e) or "401" in str(e):
+                    raise TokenExpired(str(e))
+                self.last_error = f"{coll}: {e}"
+                continue
+            _, deals = find_deals(items, self.cfg)
+            for d in deals:
+                key = f"{coll}:{id_of(d)}"
+                if key in self.seen:
+                    continue
+                self.seen.add(key)
+                rec = {
+                    "ts": dt.datetime.now().isoformat(timespec="seconds"),
+                    "collection": coll, "id": id_of(d), "number": number_of(d),
+                    "buy": d["_buy"], "floor": d["_floor"],
+                    "margin_pct": d["_margin_pct"],
+                    "net_profit_ton": d["_net_profit"],
+                }
+                out.append(rec)
+                with open(self.log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self.scans += 1
+        self.total_found += len(out)
+        self.last_scan = dt.datetime.now().isoformat(timespec="seconds")
+        # защита памяти на долгом ране
+        if len(self.seen) > 50000:
+            self.seen.clear()
+        return out
+
+
+def format_deal(rec: dict) -> str:
+    return (f"💎 {rec['collection']} #{rec['number']}\n"
+            f"цена {rec['buy']} → floor {rec['floor']} (-{rec['margin_pct']}%)\n"
+            f"чистыми ≈ {rec['net_profit_ton']} TON после комиссии\n"
+            f"id: {rec['id']}")
