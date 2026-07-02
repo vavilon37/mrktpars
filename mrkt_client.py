@@ -63,7 +63,12 @@ class MrktClient:
             kwargs["impersonate"] = "chrome"
         last = ""
         for attempt in range(5):
-            r = _rq.post(f"{BASE}{path}", **kwargs)
+            try:
+                r = _rq.post(f"{BASE}{path}", **kwargs)
+            except Exception as e:  # обрыв сети (Network unreachable, таймаут) — ретрай
+                last = f"conn: {type(e).__name__}"
+                time.sleep(1.5 * (attempt + 1))   # 1.5, 3, 4.5, 6с
+                continue
             if r.status_code == 200:
                 return r.json()
             if r.status_code == 401:
