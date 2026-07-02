@@ -19,11 +19,15 @@ class Config:
     token: str = ""                       # токен MRKT из DevTools (или /settoken в боте)
     proxy: str | None = None              # socks5://... — напр. через немецкий VPS
     collections: list[str] = field(
-        default_factory=lambda: ["Plush Pepe", "Durov's Cap", "Snoop Dogg"])
-    margin: float = 0.12                  # мин. скидка к floor
+        # ЛИКВИДНЫЕ коллекции с высоким дневным объёмом — там чаще всего
+        # проскакивают транзиентные недооценки. Floor 3-35 TON (по карману).
+        # Плохой выбор: floor-спам типа Xmas Stocking (все лоты по 2.46, спред 0)
+        # и премиум Plush Pepe (~5500 TON). Менять из бота: /watch, /unwatch.
+        default_factory=lambda: ["Mood Pack", "Swiss Watch", "Bonded Ring"])
+    margin: float = 0.08                  # мин. скидка к floor (8% > комиссии 5%)
     floor_rank: int = 3                   # какой по счёту лот считать floor
     fee: float = 0.05                     # комиссия продавца MRKT
-    poll: float = 20.0                    # пауза между обходами, сек
+    poll: float = 12.0                    # пауза между обходами, сек
     paused: bool = False
 
     @classmethod
@@ -41,9 +45,18 @@ class Config:
             json.dump(asdict(self), f, ensure_ascii=False, indent=2)
 
 
+def is_buyable(item: dict) -> bool:
+    """Отсеиваем то, что нельзя перепродать: свои и залоченные лоты."""
+    if item.get("isMine"):
+        return False
+    if item.get("isLocked") or item.get("isLockedForSale"):
+        return False
+    return True
+
+
 def find_deals(items: list[dict], cfg: Config) -> tuple[float | None, list[dict]]:
     """floor = цена лота ранга floor_rank; deals = лоты дешевле floor*(1-margin)."""
-    priced = [(price_of(it), it) for it in items]
+    priced = [(price_of(it), it) for it in items if is_buyable(it)]
     priced = [(p, it) for p, it in priced if p is not None]
     priced.sort(key=lambda x: x[0])
     if len(priced) < cfg.floor_rank:

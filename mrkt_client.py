@@ -25,6 +25,18 @@ except ImportError:  # запасной путь, если curl_cffi не пос
 
 BASE = "https://api.tgmrkt.io/api/v1"
 
+# Маркет троттлит "не-браузерные" клиенты (питоновский User-Agent -> 429).
+# С этими заголовками обычный requests проходит так же, как браузер. Проверено.
+BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://cdn.tgmrkt.io",
+    "Referer": "https://cdn.tgmrkt.io/",
+}
+
+NANO = 1_000_000_000  # 1 TON = 1e9 нанотон; MRKT отдаёт цены в нанотонах
+
 
 class MrktError(RuntimeError):
     pass
@@ -41,19 +53,27 @@ class MrktClient:
     def _post(self, path: str, json: dict) -> dict:
         kwargs = dict(
             json=json,
-            headers={"Authorization": self.token,
+            headers={**BROWSER_HEADERS,
+                     "Authorization": self.token,
                      "Content-Type": "application/json"},
             timeout=self.timeout,
             proxies=self.proxies,
         )
         if _IMPERSONATE:
             kwargs["impersonate"] = "chrome"
-        r = _rq.post(f"{BASE}{path}", **kwargs)
-        if r.status_code == 401:
-            raise MrktError("401 — токен протух. Возьми свежий из DevTools.")
-        if r.status_code != 200:
+        last = ""
+        for attempt in range(5):
+            r = _rq.post(f"{BASE}{path}", **kwargs)
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code == 401:
+                raise MrktError("401 — токен протух. Возьми свежий из DevTools.")
+            if r.status_code == 429:  # rate limit — ждём и пробуем снова
+                last = "429 rate limit"
+                time.sleep(2 * (attempt + 1))   # 2, 4, 6, 8с
+                continue
             raise MrktError(f"{path} -> HTTP {r.status_code}: {r.text[:200]}")
-        return r.json()
+        raise MrktError(f"{path} -> {last} после ретраев. Увеличь MRKT_POLL / снизь rps.")
 
     # --- проверенные эндпоинты -------------------------------------------
 
@@ -61,6 +81,7 @@ class MrktClient:
     def auth(init_data: str, proxy: str | None = None) -> str:
         """Обменять Telegram init_data на токен. Для Этапа 2 (Pyrogram)."""
         kwargs = dict(json={"data": init_data}, timeout=20,
+                      headers={**BROWSER_HEADERS, "Content-Type": "application/json"},
                       proxies={"http": proxy, "https": proxy} if proxy else None)
         if _IMPERSONATE:
             kwargs["impersonate"] = "chrome"
@@ -111,8 +132,8 @@ class MrktClient:
 
 # --- защитные парсеры: точные имена полей неизвестны, пока не увидим probe ---
 
-_ITEM_KEYS = ("items", "gifts", "results", "data", "list")
-_PRICE_KEYS = ("price", "salePrice", "sellPrice", "amount", "priceTon", "tonPrice")
+_ITEM_KEYS = ("gifts", "items", "results", "data", "list")
+_PRICE_KEYS = ("salePrice", "salePriceWithoutFee", "price", "priceTon", "amount")
 _ID_KEYS = ("id", "giftId", "nftId", "_id")
 _NUM_KEYS = ("number", "num", "index", "tgId")
 
@@ -135,15 +156,17 @@ def _extract_items(data) -> list[dict]:
 
 
 def price_of(item: dict) -> float | None:
+    """Цена лота в TON. MRKT хранит salePrice в нанотонах — приводим к TON."""
     for k in _PRICE_KEYS:
         v = item.get(k)
-        if isinstance(v, (int, float)):
-            return float(v)
-        if isinstance(v, str):
-            try:
-                return float(v)
-            except ValueError:
-                pass
+        if v is None:
+            continue
+        try:
+            val = float(v)
+        except (TypeError, ValueError):
+            continue
+        # нанотоны — целое ~1e12; TON — небольшое число. >1e6 => это нанотоны.
+        return val / NANO if val > 1e6 else val
     return None
 
 
