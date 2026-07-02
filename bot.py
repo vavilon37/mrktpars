@@ -37,6 +37,13 @@ if not cfg.token:                              # первичный токен �
     cfg.token = os.getenv("MRKT_TOKEN", "")
 if not cfg.proxy:
     cfg.proxy = os.getenv("MRKT_PROXY") or None
+# необязательные оверрайды из окружения (удобно крутить прямо в bothost)
+if os.getenv("MRKT_POLL"):
+    cfg.poll = float(os.getenv("MRKT_POLL"))
+if os.getenv("MRKT_MARGIN"):
+    cfg.margin = float(os.getenv("MRKT_MARGIN"))
+if os.getenv("MRKT_COLLECTIONS"):
+    cfg.collections = [c.strip() for c in os.getenv("MRKT_COLLECTIONS").split(",") if c.strip()]
 cfg.save(CONFIG_PATH)
 
 engine = ScanEngine(cfg, log_path=os.getenv("MRKT_LOG", "deals.jsonl"))
