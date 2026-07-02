@@ -26,7 +26,9 @@ class Config:
         default_factory=lambda: ["Mood Pack", "Swiss Watch", "Bonded Ring"])
     margin: float = 0.08                  # мин. скидка к floor (8% > комиссии 5%)
     floor_rank: int = 3                   # какой по счёту лот считать floor
-    fee: float = 0.05                     # комиссия продавца MRKT
+    fee: float = 0.05                     # комиссия продавца — ДИНАМИЧЕСКАЯ (промо,
+                                          # бывает 0%). API не отдаёт. Смотри в
+                                          # приложении при листинге и ставь сюда.
     poll: float = 12.0                    # пауза между обходами, сек
     paused: bool = False
 
