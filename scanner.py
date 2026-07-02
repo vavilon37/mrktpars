@@ -25,9 +25,9 @@ def build_config() -> Config:
         proxy=os.getenv("MRKT_PROXY") or None,
         collections=[c.strip() for c in os.getenv(
             "MRKT_COLLECTIONS", "Mood Pack,Swiss Watch,Bonded Ring").split(",") if c.strip()],
-        margin=float(os.getenv("MRKT_MARGIN", "0.08")),
+        margin=float(os.getenv("MRKT_MARGIN", "0.04")),
         floor_rank=int(os.getenv("MRKT_FLOOR_RANK", "3")),
-        fee=float(os.getenv("MRKT_FEE", "0.05")),
+        fee=float(os.getenv("MRKT_FEE", "0")),
         poll=float(os.getenv("MRKT_POLL", "12")),
     )
 
