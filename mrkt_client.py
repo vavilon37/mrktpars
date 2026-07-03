@@ -23,6 +23,10 @@ except ImportError:  # запасной путь, если curl_cffi не пос
     import requests as _rq  # type: ignore
     _IMPERSONATE = False
 
+# Общая сессия: держит соединение живым (keep-alive) -> без повторных TLS-
+# хендшейков каждый запрос быстрее. requests.Session потокобезопасен для отправки.
+_SESSION = _rq.Session()
+
 BASE = "https://api.tgmrkt.io/api/v1"
 
 # Маркет троттлит "не-браузерные" клиенты (питоновский User-Agent -> 429).
@@ -64,7 +68,7 @@ class MrktClient:
         last = ""
         for attempt in range(5):
             try:
-                r = _rq.post(f"{BASE}{path}", **kwargs)
+                r = _SESSION.post(f"{BASE}{path}", **kwargs)
             except Exception as e:  # обрыв сети (Network unreachable, таймаут) — ретрай
                 last = f"conn: {type(e).__name__}"
                 time.sleep(1.5 * (attempt + 1))   # 1.5, 3, 4.5, 6с

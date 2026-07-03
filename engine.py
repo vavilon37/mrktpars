@@ -107,8 +107,8 @@ class ScanEngine:
         colls = list(self.cfg.collections)
 
         def fetch(coll):
-            try:
-                return coll, client.cheapest(coll, count=20), None
+            try:  # count=10 — для детекта floor (3-й лот) хватает, ответ вдвое легче
+                return coll, client.cheapest(coll, count=10), None
             except Exception as e:  # noqa: BLE001 — одна коллекция не валит проход
                 return coll, None, e
 
