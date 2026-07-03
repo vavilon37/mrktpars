@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import datetime as dt
 from dataclasses import dataclass, field, asdict
+from concurrent.futures import ThreadPoolExecutor
 
 from mrkt_client import MrktClient, MrktError, price_of, id_of, number_of
 
@@ -98,18 +99,32 @@ class ScanEngine:
         return MrktClient(self.cfg.token, proxy=self.cfg.proxy)
 
     def scan_once(self) -> list[dict]:
-        """Один обход всех коллекций. Возвращает список НОВЫХ флипов (dict-записи)."""
+        """Один обход коллекций. Запросы идут ПАРАЛЛЕЛЬНО, поэтому полный проход
+        занимает ~время одного запроса, а не сумму по всем коллекциям."""
         if not self.cfg.token:
             raise MrktError("Токен не задан. Пришли его командой /settoken.")
         client = self._client()
-        out: list[dict] = []
-        for coll in self.cfg.collections:
+        colls = list(self.cfg.collections)
+
+        def fetch(coll):
             try:
-                items = client.cheapest(coll, count=20)
-            except MrktError as e:
-                if "протух" in str(e) or "401" in str(e):
-                    raise TokenExpired(str(e))
-                self.last_error = f"{coll}: {e}"
+                return coll, client.cheapest(coll, count=20), None
+            except Exception as e:  # noqa: BLE001 — одна коллекция не валит проход
+                return coll, None, e
+
+        # все коллекции опрашиваем разом
+        workers = min(10, max(1, len(colls)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(fetch, colls))
+
+        out: list[dict] = []
+        token_expired = False
+        for coll, items, err in results:
+            if err is not None:
+                if "протух" in str(err) or "401" in str(err):
+                    token_expired = True
+                else:
+                    self.last_error = f"{coll}: {err}"
                 continue
             _, deals = find_deals(items, self.cfg)
             for d in deals:
@@ -133,6 +148,8 @@ class ScanEngine:
         # защита памяти на долгом ране
         if len(self.seen) > 50000:
             self.seen.clear()
+        if token_expired and not out:
+            raise TokenExpired("токен протух")
         return out
 
 
